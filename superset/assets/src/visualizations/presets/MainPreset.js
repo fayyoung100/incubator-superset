@@ -40,6 +40,8 @@ import TableChartPlugin from '@superset-ui/legacy-plugin-chart-table';
 import TreemapChartPlugin from '@superset-ui/legacy-plugin-chart-treemap';
 import WordCloudChartPlugin from '@superset-ui/legacy-plugin-chart-word-cloud';
 import WorldMapChartPlugin from '@superset-ui/legacy-plugin-chart-world-map';
+import EchartsLineBar from 'superset-echarts-line-bar';
+
 // There is a known issue with bubble chart that the bubbles will not show up.
 // (<path d="NaN" />)
 // Make sure to import '@superset-ui/legacy-preset-chart-nvd3/lib'
@@ -101,6 +103,7 @@ export default class MainPreset extends Preset {
         new TreemapChartPlugin().configure({ key: 'treemap' }),
         new WordCloudChartPlugin().configure({ key: 'word_cloud' }),
         new WorldMapChartPlugin().configure({ key: 'world_map' }),
+        new EchartsLineBar().configure({ key: 'echarts-line-bar'}),
       ],
     });
   }

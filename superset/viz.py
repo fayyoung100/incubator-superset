@@ -1373,6 +1373,75 @@ class NVD3DualLineViz(NVD3Viz):
         chart_data = self.to_series(df)
         return chart_data
 
+class EchartsLineBarViz(NVD3Viz):
+
+    """Echarts Line Bar viz"""
+
+    viz_type = "echarts-line-bar"
+    verbose_name = _("Directed Force Layout")
+    credits = '<a href="https://github.com/d3/d3-chord">Bostock</a>'
+    sort_series = False
+    is_timeseries = True
+
+    def query_obj(self):
+        d = super().query_obj()
+        m1 = self.form_data.get("metric")
+        m2 = self.form_data.get("metric_2")
+        d["metrics"] = [m1, m2]
+        if not m1:
+            raise Exception(_("Pick a metric for left axis!"))
+        if not m2:
+            raise Exception(_("Pick a metric for right axis!"))
+        if m1 == m2:
+            raise Exception(
+                _("Please choose different metrics" " on left and right axis")
+            )
+        return d
+
+    def to_series(self, df, classed=""):
+        cols = []
+        for col in df.columns:
+            if col == "":
+                cols.append("N/A")
+            elif col is None:
+                cols.append("NULL")
+            else:
+                cols.append(col)
+        df.columns = cols
+        series = df.to_dict("series")
+        chart_data = []
+        metrics = [self.form_data.get("metric"), self.form_data.get("metric_2")]
+        for i, m in enumerate(metrics):
+            m = utils.get_metric_name(m)
+            ys = series[m]
+            if df[m].dtype.kind not in "biufc":
+                continue
+            series_title = m
+            d = {
+                "key": series_title,
+                "classed": classed,
+                "values": [
+                    {"x": ds, "y": ys[ds] if ds in ys else None} for ds in df.index
+                ],
+                "yAxis": i + 1,
+                "type": "line" if i % 2 == 0 else "bar",
+            }
+            chart_data.append(d)
+        return chart_data
+
+    def get_data(self, df):
+        fd = self.form_data
+
+        if self.form_data.get("granularity") == "all":
+            raise Exception(_("Pick a time granularity for your time series"))
+
+        metric = utils.get_metric_name(fd.get("metric"))
+        metric_2 = utils.get_metric_name(fd.get("metric_2"))
+        df = df.pivot_table(index=DTTM_ALIAS, values=[metric, metric_2], dropna=False)
+
+        chart_data = self.to_series(df)
+        return chart_data
+
 
 class NVD3TimeSeriesBarViz(NVD3TimeSeriesViz):
 
@@ -1673,6 +1742,119 @@ class DirectedForceViz(BaseViz):
     def get_data(self, df):
         df.columns = ["source", "target", "value"]
         return df.to_dict(orient="records")
+
+
+class EchartsStackViz(BaseViz):
+
+    """Echarts Stack viz"""
+
+    viz_type = "echarts-stack"
+    verbose_name = _("Directed Force Layout")
+    credits = '<a href="https://github.com/d3/d3-chord">Bostock</a>'
+    is_timeseries = False
+
+    def query_obj(self):
+        qry = super().query_obj()
+        fd = self.form_data
+        # qry["groupby"] = [fd.get("groupby"), fd.get("columns")]
+        qry["metrics"] = [utils.get_metric_name(fd.get("metric"))]
+        return qry
+
+    def get_data(self, df):
+        super().get_data(df)
+        from superset.models.core import Slice
+        from superset import db
+        fd = self.form_data
+        return {
+              "raw_data": [
+                ['timestamp', '1280164', '1100215', '1253200', '1237556', '1233881', 'other'],
+                [1551024000000, 274890, 377541, 317947, 478629, 524875, 142426],
+                [1551110400000, 267393, 262359, 317947, 495423, 487084, 160613],
+                [1551196800000, 347361, 364743, 419930, 478629, 592059, 132592],
+                [1551283200000, 399840, 358344, 359940, 517815, 608855, 145074],
+                [1551369600000, 369852, 332748, 407932, 632574, 659243, 125249],
+                [1551456000000, 409836, 454329, 443926, 750132, 730626, 186640],
+                [1551542400000, 452319, 447930, 497917, 794916, 839800, 153145],
+              ],
+              "percent_data": [
+                ['timestamp', '1280164', '1100215', '1253200', '1237556', '1233881', 'other'],
+                [
+                  1551024000000,
+                  0.99179876338508,
+                  1.362161944512956,
+                  1.1471477369929644,
+                  1.7268858464121555,
+                  1.893740681478933,
+                  92.8782650272179,
+                ],
+                [
+                  1551110400000,
+                  1.0132046299889368,
+                  0.9941298146146963,
+                  1.2047636717905572,
+                  1.8772551166373426,
+                  1.845657006703733,
+                  93.06498976026474,
+                ],
+                [
+                  1551196800000,
+                  1.213051129804269,
+                  1.273752402365834,
+                  1.4664759743860325,
+                  1.671464122935757,
+                  2.0675834041840786,
+                  92.30767296632402,
+                ],
+                [
+                  1551283200000,
+                  1.290228148116023,
+                  1.15632631929894,
+                  1.1614763896380584,
+                  1.670917088126997,
+                  1.9646905240125578,
+                  92.75636153080742,
+                ],
+                [
+                  1551369600000,
+                  1.1584084715674507,
+                  1.042195532529569,
+                  1.277678327069891,
+                  1.9812765119380418,
+                  2.0648061279147902,
+                  92.47563502898025,
+                ],
+                [
+                  1551456000000,
+                  1.1684398754925411,
+                  1.2952891405163303,
+                  1.2656302525105207,
+                  2.1386216454459124,
+                  2.0830101613123624,
+                  92.04900892472233,
+                ],
+                [
+                  1551542400000,
+                  1.1255628728861402,
+                  1.114641166194409,
+                  1.2390301733485622,
+                  1.978090543760397,
+                  2.0897811072490446,
+                  92.45289413656144,
+                ],
+              ],
+              "pic_data": {
+                '1280164':
+                  'image.floryday.com/image/308_422/9a/63/9a6324ab78a661c35dd76fb00036437d.jpg',
+                '1253200':
+                  'image.floryday.com/image/308_422/6d/f7/6df7f07ffb608d4ef559c6c40cdf8604.jpg',
+                '1237556':
+                  'image.floryday.com/image/308_422/84/e5/84e506cf22bd76d4ef6a3dadb1324f28.jpg',
+                '1233881':
+                  'image.floryday.com/image/308_422/fb/53/fb53f935b197db5e99ce41b5295241e4.jpg',
+                '1100215':
+                  'image.floryday.com/image/308_422/48/01/4801450ef4c11a1a100e6b50c142bf49.jpg',
+              },
+            }
 
 
 class ChordViz(BaseViz):

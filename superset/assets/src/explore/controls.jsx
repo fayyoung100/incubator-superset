@@ -1183,6 +1183,59 @@ export const controls = {
     default: '',
   },
 
+  y_axis_2_label: {
+    type: 'TextControl',
+    label: t('Y Axis Label 2'),
+    renderTrigger: true,
+    default: '',
+  },
+
+  y_axis_max: {
+    isInt: true,
+    type: 'TextControl',
+    label: t('Y Axis Max'),
+    renderTrigger: true,
+    default: '2000',
+  },
+
+  y_axis_2_max: {
+    isInt: true,
+    type: 'TextControl',
+    label: t('Y Axis Max 2'),
+    renderTrigger: true,
+    default: '3000000',
+  },
+
+  y_axis_interval: {
+    type: 'SelectControl',
+    label: t('Y Axis Interval'),
+    default: 4,
+    choices: formatSelectOptionsForRange(4, 10),
+    description: t('Y Axis Interval'),
+  },
+
+  y_axis_type: {
+    type: 'SelectControl',
+    label: t('Y Axis Type'),
+    default: 'line',
+    choices: [
+      ['line', 'line'],
+      ['bar', 'bar'],
+    ],
+    description: t('Y Axis Type'),
+  },
+
+  y_axis_2_type: {
+    type: 'SelectControl',
+    label: t('Y Axis Type 2'),
+    default: 'bar',
+    choices: [
+      ['line', 'line'],
+      ['bar', 'bar'],
+    ],
+    description: t('Y Axis Type'),
+  },
+
   compare_lag: {
     type: 'TextControl',
     label: t('Comparison Period Lag'),
