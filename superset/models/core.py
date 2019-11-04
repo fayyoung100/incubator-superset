@@ -16,21 +16,23 @@
 # under the License.
 # pylint: disable=C,R,W
 """A collection of ORM sqlalchemy models for Superset"""
-from contextlib import closing
-from copy import copy, deepcopy
-from datetime import datetime
 import json
 import logging
 import textwrap
+from contextlib import closing
+from copy import copy, deepcopy
+from datetime import datetime
 from typing import List
+from urllib import parse
 
+import numpy
+import pandas as pd
+import sqlalchemy as sqla
+import sqlparse
 from flask import escape, g, Markup, request
 from flask_appbuilder import Model
 from flask_appbuilder.models.decorators import renders
 from flask_appbuilder.security.sqla.models import User
-import numpy
-import pandas as pd
-import sqlalchemy as sqla
 from sqlalchemy import (
     Boolean,
     Column,
@@ -50,9 +52,8 @@ from sqlalchemy.orm.session import make_transient
 from sqlalchemy.pool import NullPool
 from sqlalchemy.schema import UniqueConstraint
 from sqlalchemy_utils import EncryptedType
-import sqlparse
 
-from superset import app, db, db_engine_specs, security_manager
+from superset import app, db, db_engine_specs, is_feature_enabled, security_manager
 from superset.connectors.connector_registry import ConnectorRegistry
 from superset.legacy import update_time_range
 from superset.models.helpers import AuditMixinNullable, ImportMixin
@@ -60,18 +61,17 @@ from superset.models.tags import ChartUpdater, DashboardUpdater, FavStarUpdater
 from superset.models.user_attributes import UserAttribute
 from superset.utils import cache as cache_util, core as utils
 from superset.viz import viz_types
-from urllib import parse  # noqa
 
 config = app.config
-custom_password_store = config.get("SQLALCHEMY_CUSTOM_PASSWORD_STORE")
-stats_logger = config.get("STATS_LOGGER")
-log_query = config.get("QUERY_LOGGER")
+custom_password_store = config["SQLALCHEMY_CUSTOM_PASSWORD_STORE"]
+stats_logger = config["STATS_LOGGER"]
+log_query = config["QUERY_LOGGER"]
 metadata = Model.metadata  # pylint: disable=no-member
 
 PASSWORD_MASK = "X" * 10
 
 
-def set_related_perm(mapper, connection, target):  # noqa
+def set_related_perm(mapper, connection, target):
     src_class = target.cls_model
     id_ = target.datasource_id
     if id_:
@@ -81,7 +81,7 @@ def set_related_perm(mapper, connection, target):  # noqa
 
 
 def copy_dashboard(mapper, connection, target):
-    dashboard_id = config.get("DASHBOARD_TEMPLATE_ID")
+    dashboard_id = config["DASHBOARD_TEMPLATE_ID"]
     if dashboard_id is None:
         return
 
@@ -167,14 +167,14 @@ class Slice(Model, AuditMixinNullable, ImportMixin):
     perm = Column(String(1000))
     owners = relationship(security_manager.user_model, secondary=slice_user)
 
-    export_fields = (
+    export_fields = [
         "slice_name",
         "datasource_type",
         "datasource_name",
         "viz_type",
         "params",
         "cache_timeout",
-    )
+    ]
 
     def __repr__(self):
         return self.slice_name or str(self.id)
@@ -361,6 +361,7 @@ class Slice(Model, AuditMixinNullable, ImportMixin):
         slc_to_import.alter_params(remote_id=slc_to_import.id, import_time=import_time)
 
         slc_to_import = slc_to_import.copy()
+        slc_to_import.reset_ownership()
         params = slc_to_import.params_dict
         slc_to_import.datasource_id = ConnectorRegistry.get_datasource_by_name(
             session,
@@ -395,6 +396,7 @@ dashboard_slices = Table(
     Column("id", Integer, primary_key=True),
     Column("dashboard_id", Integer, ForeignKey("dashboards.id")),
     Column("slice_id", Integer, ForeignKey("slices.id")),
+    UniqueConstraint("dashboard_id", "slice_id"),
 )
 
 dashboard_user = Table(
@@ -422,14 +424,14 @@ class Dashboard(Model, AuditMixinNullable, ImportMixin):
     owners = relationship(security_manager.user_model, secondary=dashboard_user)
     published = Column(Boolean, default=False)
 
-    export_fields = (
+    export_fields = [
         "dashboard_title",
         "position_json",
         "json_metadata",
         "description",
         "css",
         "slug",
-    )
+    ]
 
     def __repr__(self):
         return self.dashboard_title or str(self.id)
@@ -616,7 +618,9 @@ class Dashboard(Model, AuditMixinNullable, ImportMixin):
             ):
                 existing_dashboard = dash
 
+        dashboard_to_import = dashboard_to_import.copy()
         dashboard_to_import.id = None
+        dashboard_to_import.reset_ownership()
         # position_json can be empty for dashboards
         # with charts added from chart-edit page and without re-arranging
         if dashboard_to_import.position_json:
@@ -645,14 +649,10 @@ class Dashboard(Model, AuditMixinNullable, ImportMixin):
             session.flush()
             return existing_dashboard.id
         else:
-            # session.add(dashboard_to_import) causes sqlachemy failures
-            # related to the attached users / slices. Creating new object
-            # allows to avoid conflicts in the sql alchemy state.
-            copied_dash = dashboard_to_import.copy()
-            copied_dash.slices = new_slices
-            session.add(copied_dash)
+            dashboard_to_import.slices = new_slices
+            session.add(dashboard_to_import)
             session.flush()
-            return copied_dash.id
+            return dashboard_to_import.id
 
     @classmethod
     def export_dashboards(cls, dashboard_ids):
@@ -678,7 +678,7 @@ class Dashboard(Model, AuditMixinNullable, ImportMixin):
                 # add extra params for the import
                 copied_slc.alter_params(
                     remote_id=slc.id,
-                    datasource_name=slc.datasource.name,
+                    datasource_name=slc.datasource.datasource_name,
                     schema=slc.datasource.schema,
                     database_name=slc.datasource.database.name,
                 )
@@ -723,9 +723,9 @@ class Database(Model, AuditMixinNullable, ImportMixin):
     id = Column(Integer, primary_key=True)
     verbose_name = Column(String(250), unique=True)
     # short unique name, used in permissions
-    database_name = Column(String(250), unique=True)
+    database_name = Column(String(250), unique=True, nullable=False)
     sqlalchemy_uri = Column(String(1024))
-    password = Column(EncryptedType(String(1024), config.get("SECRET_KEY")))
+    password = Column(EncryptedType(String(1024), config["SECRET_KEY"]))
     cache_timeout = Column(Integer)
     select_as_create_table_as = Column(Boolean, default=False)
     expose_in_sqllab = Column(Boolean, default=True)
@@ -748,9 +748,10 @@ class Database(Model, AuditMixinNullable, ImportMixin):
     """
         ),
     )
+    encrypted_extra = Column(EncryptedType(Text, config["SECRET_KEY"]), nullable=True)
     perm = Column(String(1000))
     impersonate_user = Column(Boolean, default=False)
-    export_fields = (
+    export_fields = [
         "database_name",
         "sqlalchemy_uri",
         "cache_timeout",
@@ -759,11 +760,11 @@ class Database(Model, AuditMixinNullable, ImportMixin):
         "allow_ctas",
         "allow_csv_upload",
         "extra",
-    )
+    ]
     export_children = ["tables"]
 
     def __repr__(self):
-        return self.verbose_name if self.verbose_name else self.database_name
+        return self.name
 
     @property
     def name(self):
@@ -771,7 +772,17 @@ class Database(Model, AuditMixinNullable, ImportMixin):
 
     @property
     def allows_subquery(self):
-        return self.db_engine_spec.allows_subquery
+        return self.db_engine_spec.allows_subqueries
+
+    @property
+    def allows_cost_estimate(self) -> bool:
+        extra = self.get_extra()
+        database_version = extra.get("version")
+        cost_estimate_enabled = extra.get("cost_estimate_enabled")
+        return (
+            self.db_engine_spec.get_allow_cost_estimate(database_version)
+            and cost_estimate_enabled
+        )
 
     @property
     def data(self):
@@ -781,6 +792,7 @@ class Database(Model, AuditMixinNullable, ImportMixin):
             "backend": self.backend,
             "allow_multi_schema_metadata_fetch": self.allow_multi_schema_metadata_fetch,
             "allows_subquery": self.allows_subquery,
+            "allows_cost_estimate": self.allows_cost_estimate,
         }
 
     @property
@@ -892,7 +904,9 @@ class Database(Model, AuditMixinNullable, ImportMixin):
             d["configuration"] = configuration
             params["connect_args"] = d
 
-        DB_CONNECTION_MUTATOR = config.get("DB_CONNECTION_MUTATOR")
+        params.update(self.get_encrypted_extra())
+
+        DB_CONNECTION_MUTATOR = config["DB_CONNECTION_MUTATOR"]
         if DB_CONNECTION_MUTATOR:
             url, params = DB_CONNECTION_MUTATOR(
                 url, params, effective_username, security_manager, source
@@ -1052,7 +1066,7 @@ class Database(Model, AuditMixinNullable, ImportMixin):
         """
         try:
             tables = self.db_engine_spec.get_table_names(
-                inspector=self.inspector, schema=schema
+                database=self, inspector=self.inspector, schema=schema
             )
             return [
                 utils.DatasourceName(table=table, schema=schema) for table in tables
@@ -1086,7 +1100,7 @@ class Database(Model, AuditMixinNullable, ImportMixin):
         """
         try:
             views = self.db_engine_spec.get_view_names(
-                inspector=self.inspector, schema=schema
+                database=self, inspector=self.inspector, schema=schema
             )
             return [utils.DatasourceName(table=view, schema=schema) for view in views]
         except Exception as e:
@@ -1134,10 +1148,20 @@ class Database(Model, AuditMixinNullable, ImportMixin):
         if self.extra:
             try:
                 extra = json.loads(self.extra)
-            except Exception as e:
+            except json.JSONDecodeError as e:
                 logging.error(e)
                 raise e
         return extra
+
+    def get_encrypted_extra(self):
+        encrypted_extra = {}
+        if self.encrypted_extra:
+            try:
+                encrypted_extra = json.loads(self.encrypted_extra)
+            except json.JSONDecodeError as e:
+                logging.error(e)
+                raise e
+        return encrypted_extra
 
     def get_table(self, table_name, schema=None):
         extra = self.get_extra()
@@ -1238,7 +1262,7 @@ class DatasourceAccessRequest(Model, AuditMixinNullable):
     datasource_id = Column(Integer)
     datasource_type = Column(String(200))
 
-    ROLES_BLACKLIST = set(config.get("ROBOT_PERMISSION_ROLES", []))
+    ROLES_BLACKLIST = set(config["ROBOT_PERMISSION_ROLES"])
 
     @property
     def cls_model(self):
@@ -1299,11 +1323,12 @@ class DatasourceAccessRequest(Model, AuditMixinNullable):
 
 
 # events for updating tags
-sqla.event.listen(Slice, "after_insert", ChartUpdater.after_insert)
-sqla.event.listen(Slice, "after_update", ChartUpdater.after_update)
-sqla.event.listen(Slice, "after_delete", ChartUpdater.after_delete)
-sqla.event.listen(Dashboard, "after_insert", DashboardUpdater.after_insert)
-sqla.event.listen(Dashboard, "after_update", DashboardUpdater.after_update)
-sqla.event.listen(Dashboard, "after_delete", DashboardUpdater.after_delete)
-sqla.event.listen(FavStar, "after_insert", FavStarUpdater.after_insert)
-sqla.event.listen(FavStar, "after_delete", FavStarUpdater.after_delete)
+if is_feature_enabled("TAGGING_SYSTEM"):
+    sqla.event.listen(Slice, "after_insert", ChartUpdater.after_insert)
+    sqla.event.listen(Slice, "after_update", ChartUpdater.after_update)
+    sqla.event.listen(Slice, "after_delete", ChartUpdater.after_delete)
+    sqla.event.listen(Dashboard, "after_insert", DashboardUpdater.after_insert)
+    sqla.event.listen(Dashboard, "after_update", DashboardUpdater.after_update)
+    sqla.event.listen(Dashboard, "after_delete", DashboardUpdater.after_delete)
+    sqla.event.listen(FavStar, "after_insert", FavStarUpdater.after_insert)
+    sqla.event.listen(FavStar, "after_delete", FavStarUpdater.after_delete)
